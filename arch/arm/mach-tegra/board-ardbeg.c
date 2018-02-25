@@ -63,6 +63,7 @@
 #include <linux/platform_data/tegra_usb_modem_power.h>
 #include <linux/platform_data/tegra_ahci.h>
 #include <linux/irqchip/tegra.h>
+#include <sound/rt5670.h>
 #include <sound/max98090.h>
 
 #include <mach/irqs.h>
@@ -80,6 +81,10 @@
 #include <mach/gpio-tegra.h>
 #include <mach/xusb.h>
 
+#include <linux/i2c/atmel_mxt_ts.h>
+#include <linux/firmware.h>
+#include <linux/input/synaptics_dsx.h>
+
 #include "board.h"
 #include "board-ardbeg.h"
 #include "board-common.h"
@@ -94,74 +99,91 @@
 #include "tegra-board-id.h"
 #include "tegra-of-dev-auxdata.h"
 
+#include <linux/power/bq27x00_battery.h>
+#include <linux/platform_data/leds-lp55xx.h>
+
+#define BQ27520_INT_SUPPORT
+
 static struct board_info board_info, display_board_info;
 
-static struct resource ardbeg_bluedroid_pm_resources[] = {
-	[0] = {
-		.name   = "shutdown_gpio",
-		.start  = TEGRA_GPIO_PR1,
-		.end    = TEGRA_GPIO_PR1,
-		.flags  = IORESOURCE_IO,
-	},
-	[1] = {
-		.name = "host_wake",
-		.flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
-	},
-	[2] = {
-		.name = "gpio_ext_wake",
-		.start  = TEGRA_GPIO_PEE1,
-		.end    = TEGRA_GPIO_PEE1,
-		.flags  = IORESOURCE_IO,
-	},
-	[3] = {
-		.name = "gpio_host_wake",
-		.start  = TEGRA_GPIO_PU6,
-		.end    = TEGRA_GPIO_PU6,
-		.flags  = IORESOURCE_IO,
-	},
-	[4] = {
-		.name = "reset_gpio",
-		.start  = TEGRA_GPIO_PX1,
-		.end    = TEGRA_GPIO_PX1,
-		.flags  = IORESOURCE_IO,
-	},
-};
+#ifdef CONFIG_LEDS_LP5521
+#define LP5521_CHIP_EN_GPIO        TEGRA_GPIO_PG7
+static struct lp55xx_led_config lp5521_led_config[] = {
+	{
+		.name           = "red",
+		.chan_nr        = 0,
+		.led_current    = 20,
+		.max_current	= 255,
+ 	},
+	{
+		.name           = "green",
+		.chan_nr        = 1,
+		.led_current    = 20,
+		.max_current	= 255,
+ 	},
+	{
+		.name           = "blue",
+		.chan_nr        = 2,
+		.led_current    = 20,
+		.max_current	= 255,
+	}
+ };
 
-static struct platform_device ardbeg_bluedroid_pm_device = {
-	.name = "bluedroid_pm",
-	.id             = 0,
-	.num_resources  = ARRAY_SIZE(ardbeg_bluedroid_pm_resources),
-	.resource       = ardbeg_bluedroid_pm_resources,
-};
-
-static noinline void __init ardbeg_setup_bluedroid_pm(void)
+static int lp5521_setup(void)
 {
-	ardbeg_bluedroid_pm_resources[1].start =
-		ardbeg_bluedroid_pm_resources[1].end =
-				gpio_to_irq(TEGRA_GPIO_PU6);
-	platform_device_register(&ardbeg_bluedroid_pm_device);
+	return gpio_request_one(LP5521_CHIP_EN_GPIO, GPIOF_DIR_OUT,
+			"lp5521_enable");
 }
 
-static struct i2c_board_info __initdata rt5639_board_info = {
-	I2C_BOARD_INFO("rt5639", 0x1c),
+static void lp5521_release(void)
+{
+	gpio_free(LP5521_CHIP_EN_GPIO);
+}
+
+static void lp5521_enable(bool state)
+{
+	gpio_set_value(LP5521_CHIP_EN_GPIO, !!state);
+}
+
+static struct lp55xx_platform_data lp5521_platform_data = {
+	.led_config             = lp5521_led_config,
+	.num_channels           = ARRAY_SIZE(lp5521_led_config),
+	.clock_mode             = LP55XX_CLOCK_AUTO,
+	.setup_resources        = lp5521_setup,
+	.release_resources      = lp5521_release,
+	.enable                 = lp5521_enable,
+};
+#endif
+
+static struct i2c_board_info __initdata i2c_led_board_info[] = {
+#ifdef CONFIG_LEDS_LP5521
+	{
+		I2C_BOARD_INFO("lp5521", 0x32),
+		.platform_data = &lp5521_platform_data,
+	},
+#endif
+ };
+
+static struct rt5670_platform_data rt5671_pdata = {
+	.jd_mode = 2,
+	.codec_gpio = TEGRA_GPIO_CDC_IRQ,
+	.in2_diff = true,
+	.in3_diff = false,
+	.in4_diff = true,
+	.bclk_32fs = {false, true, true, true},
 };
 
-static struct max98090_eq_cfg max98090_eq_cfg[] = {
-};
-
-static struct max98090_pdata norrin_max98090_pdata = {
-	/* Equalizer Configuration */
-	.eq_cfg = max98090_eq_cfg,
-	.eq_cfgcnt = ARRAY_SIZE(max98090_eq_cfg),
-
-	/* Microphone Configuration */
-	.digmic_left_mode = 1,
-	.digmic_right_mode = 1,
-};
-
-static struct i2c_board_info __initdata max98090_board_info = {
-	I2C_BOARD_INFO("max98090", 0x10),
-	.platform_data	= &norrin_max98090_pdata,
+static struct i2c_board_info __initdata audio_board_info[] = {
+	{
+		I2C_BOARD_INFO("rt5671", 0x1c),
+		.platform_data = &rt5671_pdata,
+ 	},
+	{
+		I2C_BOARD_INFO("tfa98xx", 0x34),
+ 	},
+	{
+		I2C_BOARD_INFO("tfa98xx", 0x37),
+ 	},		
 };
 
 static __initdata struct tegra_clk_init_table ardbeg_clk_init_table[] = {
@@ -202,6 +224,7 @@ static __initdata struct tegra_clk_init_table ardbeg_clk_init_table[] = {
 	{ "uartb",	"pll_p",	408000000,	false},
 	{ "uartc",	"pll_p",	408000000,	false},
 	{ "uartd",	"pll_p",	408000000,	false},
+	{ "audio.emc",	"emc",		50000000,	false},
 	{ NULL,		NULL,		0,		0},
 };
 
@@ -223,15 +246,80 @@ static struct i2c_board_info __initdata i2c_touchpad_board_info = {
 	.platform_data  = &i2c_touchpad_pdata,
 };
 
+#ifdef CONFIG_BATTERY_BQ27x00
+#define BQ27X00_LGC_FIRMWARE	"0105_lgc.dffs"
+#define BQ27X00_ATL_FIRMWARE	"0205_atl.dffs"
+
+static unsigned char bq27x00_lgc_config[] = {
+	#include "bq27520g4_lgc_0003.h"
+};
+
+static unsigned char bq27x00_atl_config[] = {
+	#include "bq27520g4_atl_0003.h"
+};
+
+DECLARE_BUILTIN_FIRMWARE_SIZE(BQ27X00_LGC_FIRMWARE,
+		bq27x00_lgc_config, sizeof(bq27x00_lgc_config) - 1);
+DECLARE_BUILTIN_FIRMWARE_SIZE(BQ27X00_ATL_FIRMWARE,
+		bq27x00_atl_config, sizeof(bq27x00_atl_config) - 1);
+
+/* Gas gauge board specific configuration filled in at board init */
+static struct bq27x00_platform_data bq27520_platform_data = {
+	.soc_int_irq = -1,
+	.bat_low_irq = -1,
+	.fw_name = {BQ27X00_LGC_FIRMWARE, BQ27X00_ATL_FIRMWARE},
+};
+
+static struct i2c_board_info __initdata bq27520_boardinfo[] = {
+	{
+		I2C_BOARD_INFO("bq27520", 0x55),
+		.platform_data = &bq27520_platform_data,
+	},
+};
+
+#ifdef BQ27520_INT_SUPPORT
+#define BQ27520_BATTERY_INT	TEGRA_GPIO_PQ5
+/* BQ27520 is on I2C1 with the PMIC; this init needs to happen before that bus is initialized. */
+static int __init ardbeg_bq27520_init(void)
+{
+	int soc_int_gpio, soc_int_irq;
+	int res;
+
+	soc_int_gpio = BQ27520_BATTERY_INT;
+
+	res = gpio_request(soc_int_gpio, "battery_int_n");
+	if (res) {
+		pr_err("%s: Failed to get soc_int gpio: %d\n", __func__, res);
+		goto error;
+	}
+
+	soc_int_irq = gpio_to_irq(soc_int_gpio);
+
+	res = irq_set_irq_wake(soc_int_irq, 1);
+	if (res) {
+		pr_err("%s: Failed to set irq wake for soc_int: %d\n", __func__, res);
+		goto error;
+	}
+
+	pr_warn("%s: soc_int_gpio=%d soc_int_irq=%d\n",
+			__func__, soc_int_gpio, soc_int_irq);
+
+	bq27520_platform_data.soc_int_irq = soc_int_irq;
+
+	return 0;
+
+error:
+	return res;
+}
+#endif
+#endif
+
 static void ardbeg_i2c_init(void)
 {
 	struct board_info board_info;
 	tegra_get_board_info(&board_info);
 
-	if (board_info.board_id == BOARD_PM374) {
-		i2c_register_board_info(0, &max98090_board_info, 1);
-	} else if (board_info.board_id != BOARD_PM359)
-		i2c_register_board_info(0, &rt5639_board_info, 1);
+	i2c_register_board_info(0, audio_board_info, ARRAY_SIZE(audio_board_info));
 
 	if (board_info.board_id == BOARD_PM359 ||
 		board_info.board_id == BOARD_PM358 ||
@@ -243,6 +331,11 @@ static void ardbeg_i2c_init(void)
 		i2c_touchpad_board_info.irq = gpio_to_irq(I2C_TP_IRQ);
 		i2c_register_board_info(1, &i2c_touchpad_board_info , 1);
 	}
+	i2c_register_board_info(0, i2c_led_board_info, ARRAY_SIZE(i2c_led_board_info));
+#ifdef BQ27520_INT_SUPPORT
+	ardbeg_bq27520_init();
+#endif
+	i2c_register_board_info(1, bq27520_boardinfo, ARRAY_SIZE(bq27520_boardinfo));
 }
 
 #ifndef CONFIG_USE_OF
@@ -273,125 +366,31 @@ static struct tegra_serial_platform_data ardbeg_uartd_pdata = {
 	.modem_interrupt = false,
 };
 
-static struct tegra_asoc_platform_data ardbeg_audio_pdata_rt5639 = {
-	.gpio_hp_det = TEGRA_GPIO_HP_DET,
-	.gpio_ldo1_en = TEGRA_GPIO_LDO_EN,
+static struct tegra_asoc_platform_data ardbeg_audio_pdata_rt5671 = {
+	.gpio_hp_det = -1,
+	.gpio_ldo1_en = -1,
 	.gpio_spkr_en = -1,
 	.gpio_int_mic_en = -1,
 	.gpio_ext_mic_en = -1,
-	.gpio_hp_mute = -1,
+	.gpio_hp_mute = TEGRA_GPIO_HP_MUTE,
 	.gpio_codec1 = -1,
 	.gpio_codec2 = -1,
 	.gpio_codec3 = -1,
 	.i2s_param[HIFI_CODEC]       = {
-		.audio_port_id = 1,
-		.is_i2s_master = 1,
+		.audio_port_id = 0,
+		.is_i2s_master = 0,
 		.i2s_mode = TEGRA_DAIFMT_I2S,
 		.sample_size	= 16,
 		.channels       = 2,
-		.bit_clk	= 1536000,
-	},
-	.i2s_param[BT_SCO] = {
-		.audio_port_id = 3,
-		.is_i2s_master = 1,
-		.i2s_mode = TEGRA_DAIFMT_DSP_A,
-	},
-	.i2s_param[BASEBAND]	= {
-		.audio_port_id	= 0,
-		.is_i2s_master	= 1,
-		.i2s_mode	= TEGRA_DAIFMT_I2S,
-		.sample_size	= 16,
-		.rate		= 16000,
-		.channels	= 2,
-		.bit_clk	= 1024000,
+		.rate		= 48000,
 	},
 };
 
-static struct tegra_asoc_platform_data norrin_audio_pdata_max98090 = {
-	.gpio_hp_det		= NORRIN_GPIO_HP_DET,
-	.gpio_ext_mic_en	= TEGRA_GPIO_HP_DET,
-	.gpio_hp_mute		= -1,
-	.edp_support		= true,
-	.edp_states		= {1080, 842, 0},
-	.i2s_param[HIFI_CODEC]	= {
-		.audio_port_id	= 1,
-		.is_i2s_master	= 1,
-		.i2s_mode	= TEGRA_DAIFMT_I2S,
-		.sample_size	= 16,
-		.channels	= 2,
-		.bit_clk	= 1536000,
-	},
-	.i2s_param[BT_SCO]	= {
-		.audio_port_id	= 3,
-		.is_i2s_master	= 1,
-		.i2s_mode	= TEGRA_DAIFMT_DSP_A,
-		.sample_size	= 16,
-		.channels	= 1,
-		.bit_clk	= 512000,
-	},
-};
-
-static void ardbeg_audio_init(void)
-{
-	struct board_info board_info;
-	tegra_get_board_info(&board_info);
-	if (board_info.board_id == BOARD_PM359 ||
-			board_info.board_id == BOARD_PM358 ||
-			board_info.board_id == BOARD_PM370 ||
-			board_info.board_id == BOARD_PM374 ||
-			board_info.board_id == BOARD_PM375 ||
-			board_info.board_id == BOARD_PM377 ||
-			board_info.board_id == BOARD_PM363) {
-		/*Laguna*/
-		ardbeg_audio_pdata_rt5639.gpio_hp_det = TEGRA_GPIO_HP_DET;
-		ardbeg_audio_pdata_rt5639.gpio_hp_det_active_high = 1;
-		if (board_info.board_id != BOARD_PM363)
-			ardbeg_audio_pdata_rt5639.gpio_ldo1_en = -1;
-	} else {
-		/*Ardbeg*/
-
-		if (board_info.board_id == BOARD_E1762 ||
-			board_info.board_id == BOARD_P1761 ||
-			board_info.board_id == BOARD_E1922) {
-			ardbeg_audio_pdata_rt5639.gpio_hp_det =
-				TEGRA_GPIO_CDC_IRQ;
-			ardbeg_audio_pdata_rt5639.use_codec_jd_irq = true;
-		} else {
-			ardbeg_audio_pdata_rt5639.gpio_hp_det =
-				TEGRA_GPIO_HP_DET;
-			ardbeg_audio_pdata_rt5639.use_codec_jd_irq = false;
-		}
-		ardbeg_audio_pdata_rt5639.gpio_hp_det_active_high = 0;
-		ardbeg_audio_pdata_rt5639.gpio_ldo1_en = TEGRA_GPIO_LDO_EN;
-	}
-
-	if (board_info.board_id == BOARD_E1971) {
-		ardbeg_audio_pdata_rt5639.gpio_hp_det = TEGRA_GPIO_CDC_IRQ;
-		ardbeg_audio_pdata_rt5639.use_codec_jd_irq = true;
-		ardbeg_audio_pdata_rt5639.gpio_hp_det_active_high = 0;
-		ardbeg_audio_pdata_rt5639.gpio_ldo1_en = TEGRA_GPIO_LDO_EN;
-	}
-
-	ardbeg_audio_pdata_rt5639.codec_name = "rt5639.0-001c";
-	ardbeg_audio_pdata_rt5639.codec_dai_name = "rt5639-aif1";
-
-	norrin_audio_pdata_max98090.codec_name = "max98090.0-0010";
-	norrin_audio_pdata_max98090.codec_dai_name = "HiFi";
-}
-
-static struct platform_device ardbeg_audio_device_rt5639 = {
-	.name = "tegra-snd-rt5639",
+static struct platform_device ardbeg_audio_device_rt5671 = {
+	.name = "tegra-snd-rt5671",
 	.id = 0,
 	.dev = {
-		.platform_data = &ardbeg_audio_pdata_rt5639,
-	},
-};
-
-static struct platform_device norrin_audio_device_max98090 = {
-	.name	= "tegra-snd-max98090",
-	.id	= 0,
-	.dev	= {
-		.platform_data = &norrin_audio_pdata_max98090,
+		.platform_data = &ardbeg_audio_pdata_rt5671,
 	},
 };
 
@@ -472,10 +471,12 @@ static struct platform_device *ardbeg_devices[] __initdata = {
 	&tegra_i2s_device1,
 	&tegra_i2s_device3,
 	&tegra_i2s_device4,
+	&ardbeg_audio_device_rt5671,
 	&tegra_spdif_device,
 	&spdif_dit_device,
 	&bluetooth_dit_device,
 	&baseband_dit_device,
+	&fm_dit_device,
 	&tegra_hda_device,
 	&tegra_offload_device,
 	&tegra30_avp_audio_device,
@@ -972,230 +973,187 @@ static struct of_dev_auxdata ardbeg_auxdata_lookup[] __initdata = {
 };
 #endif
 
-struct maxim_sti_pdata maxim_sti_pdata = {
-	.touch_fusion         = "/vendor/bin/touch_fusion",
-	.config_file          = "/vendor/firmware/touch_fusion.cfg",
-	.fw_name              = "maxim_fp35.bin",
-	.nl_family            = TF_FAMILY_NAME,
-	.nl_mc_groups         = 5,
-	.chip_access_method   = 2,
-	.default_reset_state  = 0,
-	.tx_buf_size          = 4100,
-	.rx_buf_size          = 4100,
-	.gpio_reset           = TOUCH_GPIO_RST_MAXIM_STI_SPI,
-	.gpio_irq             = TOUCH_GPIO_IRQ_MAXIM_STI_SPI
+#define TP_GPIO_POWER			TEGRA_GPIO_PK1
+#define TP_GPIO_RESET			TEGRA_GPIO_PK4
+#define TP_GPIO_INTR			TEGRA_GPIO_PR7
+
+#define S7040_FIRMWARE		"synaptics_s7040"
+#define S7040_OFILM_TEST_DATA	"synaptics_s7040_ofilm_test_data"
+
+static unsigned char s7040_ofilm_firmware_data[] = {
+	#include "synaptics_7040_ofilm_firmware.h"
 };
 
-struct maxim_sti_pdata maxim_sti_pdata_rd = {
-	.touch_fusion         = "/vendor/bin/touch_fusion_rd",
-	.config_file          = "/vendor/firmware/touch_fusion.cfg",
-	.fw_name              = "maxim_fp35.bin",
-	.nl_family            = TF_FAMILY_NAME,
-	.nl_mc_groups         = 5,
-	.chip_access_method   = 2,
-	.default_reset_state  = 0,
-	.tx_buf_size          = 4100,
-	.rx_buf_size          = 4100,
-	.gpio_reset           = TOUCH_GPIO_RST_MAXIM_STI_SPI,
-	.gpio_irq             = TOUCH_GPIO_IRQ_MAXIM_STI_SPI
+static unsigned char s7040_ofilm_test_data[] = {
+	#include "synaptics_7040_ofilm_test_data.h"
 };
 
-static struct tegra_spi_device_controller_data maxim_dev_cdata = {
-	.rx_clk_tap_delay = 0,
-	.is_hw_based_cs = true,
-	.tx_clk_tap_delay = 0,
+DECLARE_BUILTIN_FIRMWARE_SIZE(S7040_FIRMWARE,
+			s7040_ofilm_firmware_data, sizeof(s7040_ofilm_firmware_data));
+
+DECLARE_BUILTIN_FIRMWARE_SIZE(S7040_OFILM_TEST_DATA,
+			s7040_ofilm_test_data, sizeof(s7040_ofilm_test_data));
+
+static unsigned int key_map[] = {
+	KEY_MENU, KEY_HOME, KEY_BACK
 };
 
-struct spi_board_info maxim_sti_spi_board = {
-	.modalias = MAXIM_STI_NAME,
-	.bus_num = TOUCH_SPI_ID,
-	.chip_select = TOUCH_SPI_CS,
-	.max_speed_hz = 12 * 1000 * 1000,
-	.mode = SPI_MODE_0,
-	.platform_data = &maxim_sti_pdata,
-	.controller_data = &maxim_dev_cdata,
+static struct synaptics_dsx_cap_button_map button_map = {
+	.nbuttons		= 3,
+	.map			= key_map,
 };
 
-static __initdata struct tegra_clk_init_table touch_clk_init_table[] = {
-	/* name         parent          rate            enabled */
-	{ "extern2",    "pll_p",        41000000,       false},
-	{ "clk_out_2",  "extern2",      40800000,       false},
-	{ NULL,         NULL,           0,              0},
+static struct synaptics_dsx_board_data s7040_platform_data = {
+	.x_flip		= false,
+	.y_flip		= false,
+	.swap_axes		= false,
+	.irq_gpio		= TP_GPIO_INTR,
+	.irq_on_state		= 0,
+	.power_gpio		= -1,
+	.dcdc_gpio		= -1,
+	.power_on_state		= 1,
+	.reset_gpio		= TP_GPIO_RESET,
+	.reset_on_state		= 0,
+	.irq_flags		= IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+	.fw_name		= S7040_FIRMWARE,
+	.self_test_name		= S7040_OFILM_TEST_DATA,
+	.panel_x		= 1536,
+	.panel_y		= 2048,
+	.power_delay_ms		= 160,
+	.reset_delay_ms		= 100,
+	.reset_active_ms		= 20,
+	.byte_delay_us		= 20,
+	.block_delay_us		= 20,
+	.regulator_name		= "vdd-touch",
+	.cap_button_map		= &button_map,
 };
 
-static struct rm_spi_ts_platform_data rm31080ts_ardbeg_data = {
-	.gpio_reset = TOUCH_GPIO_RST_RAYDIUM_SPI,
-	.config = 0,
-	.platform_id = RM_PLATFORM_A010,
-	.name_of_clock = "clk_out_2",
-	.name_of_clock_con = "extern2",
+static struct i2c_board_info s7040_device_info[] __initdata = {
+ 	{
+		I2C_BOARD_INFO("synaptics_dsx_i2c", 0x20),
+		.platform_data = &s7040_platform_data,
+ 	},
+ };	
+
+#ifdef CONFIG_TOUCHSCREEN_ATMEL_MXT
+
+#include "mxT1664T.h"
+#include "mxT1066T.h"
+#define MXT1664T_FIRMWARE		"mxt1664t_fw"
+#define MXT1066T_FIRMWARE		"mxt1066t_fw"
+#define MXT1664T_LENS_CONFIG_NO_DUMMY		"mxt1664t_lens_config_no_dummy.cfg"
+#define MXT1664T_LENS_CONFIG_WITH_DUMMY		"mxt1664t_lens_config_with_dummy.cfg"
+#define MXT1066T_LENS_CONFIG			"mxt1066t_lens_config.cfg"
+
+static unsigned char mXT1664T_lens_config_no_dummy[] = {
+	#include "mxt_lens_1664t_config_no_dummy.h"
 };
 
-static struct rm_spi_ts_platform_data rm31080ts_tn8_data = {
-	.gpio_reset = TOUCH_GPIO_RST_RAYDIUM_SPI,
-	.config = 0,
-	.platform_id = RM_PLATFORM_T008,
-	.name_of_clock = "clk_out_2",
-	.name_of_clock_con = "extern2",
+static unsigned char mXT1664T_lens_config_with_dummy[] = {
+	#include "mxt_lens_1664t_config_with_dummy.h"
 };
 
-static struct rm_spi_ts_platform_data rm31080ts_tn8_p1765_data = {
-	.gpio_reset = TOUCH_GPIO_RST_RAYDIUM_SPI,
-	.config = 0,
-	.platform_id = RM_PLATFORM_T008_2,
-	.name_of_clock = "clk_out_2",
-	.name_of_clock_con = "extern2",
+static unsigned char mXT1066T_lens_config[] = {
+	#include "mxt_lens_1066t_config.h"
 };
 
-static struct rm_spi_ts_platform_data rm31080ts_norrin_data = {
-	.gpio_reset = TOUCH_GPIO_RST_RAYDIUM_SPI,
-	.config = 0,
-	.platform_id = RM_PLATFORM_P140,
-	.name_of_clock = "clk_out_2",
-	.name_of_clock_con = "extern2",
+DECLARE_BUILTIN_FIRMWARE_SIZE(MXT1664T_FIRMWARE, mXT1664Tfw, sizeof(mXT1664Tfw)-1);
+DECLARE_BUILTIN_FIRMWARE_SIZE(MXT1066T_FIRMWARE, mXT1066Tfw, sizeof(mXT1066Tfw)-1);
+DECLARE_BUILTIN_FIRMWARE_SIZE(MXT1664T_LENS_CONFIG_NO_DUMMY, \
+						mXT1664T_lens_config_no_dummy, \
+						sizeof(mXT1664T_lens_config_no_dummy)-1);
+DECLARE_BUILTIN_FIRMWARE_SIZE(MXT1664T_LENS_CONFIG_WITH_DUMMY, \
+						mXT1664T_lens_config_with_dummy, \
+						sizeof(mXT1664T_lens_config_with_dummy)-1);
+DECLARE_BUILTIN_FIRMWARE_SIZE(MXT1066T_LENS_CONFIG, \
+						mXT1066T_lens_config, \
+						sizeof(mXT1066T_lens_config)-1);
+
+static int mxt_lens_1664t_key_codes[MXT_KEYARRAY_MAX_KEYS] = {
+	KEY_BACK, KEY_HOME, KEY_MENU, KEY_POWER,
 };
 
-struct rm_spi_ts_platform_data rm31080ts_t132loki_data = {
-	.gpio_reset = TOUCH_GPIO_RST_RAYDIUM_SPI,
-	.config = 0,
-	.platform_id = RM_PLATFORM_L005,
-	.name_of_clock = "clk_out_2",
-	.name_of_clock_con = "extern2",
+static int mxt_lens_1066t_key_codes[MXT_KEYARRAY_MAX_KEYS] = {
+	KEY_MENU, KEY_HOME, KEY_BACK, KEY_POWER,
 };
 
-struct rm_spi_ts_platform_data rm31080ts_t132loki_data_jdi_5 = {
-	.gpio_reset = TOUCH_GPIO_RST_RAYDIUM_SPI,
-	.config = 0,
-	.platform_id = RM_PLATFORM_L005,
-	.name_of_clock = "clk_out_2",
-	.name_of_clock_con = "extern2",
-	.gpio_sensor_select0 = false,
-	.gpio_sensor_select1 = true,
-};
-static struct tegra_spi_device_controller_data dev_cdata = {
-	.rx_clk_tap_delay = 0,
-	.tx_clk_tap_delay = 16,
-};
-
-static struct spi_board_info rm31080a_ardbeg_spi_board[1] = {
+static struct mxt_config_info mxt_config_array[] = {
 	{
-		.modalias = "rm_ts_spidev",
-		.bus_num = TOUCH_SPI_ID,
-		.chip_select = TOUCH_SPI_CS,
-		.max_speed_hz = 12 * 1000 * 1000,
-		.mode = SPI_MODE_0,
-		.controller_data = &dev_cdata,
-		.platform_data = &rm31080ts_ardbeg_data,
+		.family_id	= 0xA4,
+		.variant_id	= 0x04,
+		.version	= 0x10,
+		.build		= 0xAA,
+		.user_id	= 0x00,
+		.bootldr_id	= 0x48,
+		.mxt_cfg_name	= MXT1664T_LENS_CONFIG_NO_DUMMY,
+		.vendor_id	= 0x4,
+		.key_codes		= mxt_lens_1664t_key_codes,
+		.key_num		= 4,
+		.mxt_fw_name		= MXT1664T_FIRMWARE,
+	},
+	{
+		.family_id	= 0xA4,
+		.variant_id	= 0x04,
+		.version	= 0x10,
+		.build		= 0xAA,
+		.user_id	= 0xAA,
+		.bootldr_id	= 0x48,
+		.mxt_cfg_name	= MXT1664T_LENS_CONFIG_WITH_DUMMY,
+		.vendor_id	= 0x4,
+		.key_codes		= mxt_lens_1664t_key_codes,
+		.key_num		= 4,
+		.mxt_fw_name		= MXT1664T_FIRMWARE,
+	},
+	{
+		.family_id	= 0xA4,
+		.variant_id	= 0x0B,
+		.version	= 0x12,
+		.build		= 0xAA,
+		.user_id	= 0x00,
+		.bootldr_id	= 0x51,
+		.mxt_cfg_name	= MXT1066T_LENS_CONFIG,
+		.vendor_id	= 0x4,
+		.key_codes		= mxt_lens_1066t_key_codes,
+		.key_num		= 4,
+		.mxt_fw_name		= MXT1066T_FIRMWARE,
 	},
 };
 
-static struct spi_board_info rm31080a_tn8_spi_board[1] = {
+static struct mxt_platform_data mxt_platform_data = {
+	.config_array		= mxt_config_array,
+	.config_array_size		= ARRAY_SIZE(mxt_config_array),
+	.irqflags		= IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+	.power_gpio		= -1,
+	.reset_gpio		= TP_GPIO_RESET,
+	.irq_gpio		= TP_GPIO_INTR,
+	.gpio_mask		= 0xc,
+	.vendor_info		= 0x03eb,
+	.product_info		= 0x214f,
+};
+
+static struct i2c_board_info mxt_device_info[] __initdata = {
 	{
-		.modalias = "rm_ts_spidev",
-		.bus_num = TOUCH_SPI_ID,
-		.chip_select = TOUCH_SPI_CS,
-		.max_speed_hz = 18 * 1000 * 1000,
-		.mode = SPI_MODE_0,
-		.controller_data = &dev_cdata,
-		.platform_data = &rm31080ts_tn8_data,
+		I2C_BOARD_INFO("atmel_mxt_ts", 0x4a),
+		.platform_data = &mxt_platform_data,
 	},
 };
 
-static struct spi_board_info rm31080a_tn8_p1765_spi_board[1] = {
-	{
-		.modalias = "rm_ts_spidev",
-		.bus_num = TOUCH_SPI_ID,
-		.chip_select = TOUCH_SPI_CS,
-		.max_speed_hz = 18 * 1000 * 1000,
-		.mode = SPI_MODE_0,
-		.controller_data = &dev_cdata,
-		.platform_data = &rm31080ts_tn8_p1765_data,
-	},
-};
-
-static struct spi_board_info rm31080a_norrin_spi_board[1] = {
-	{
-		.modalias = "rm_ts_spidev",
-		.bus_num = NORRIN_TOUCH_SPI_ID,
-		.chip_select = NORRIN_TOUCH_SPI_CS,
-		.max_speed_hz = 12 * 1000 * 1000,
-		.mode = SPI_MODE_0,
-		.controller_data = &dev_cdata,
-		.platform_data = &rm31080ts_norrin_data,
-	},
-};
+#endif
 
 static int __init ardbeg_touch_init(void)
 {
-	tegra_get_board_info(&board_info);
+#ifdef CONFIG_TOUCHSCREEN_ATMEL_MXT	
+	int i;
+	
+	pr_info(" %s init atmel touch\n", __func__);
+	for (i = 0; i < ARRAY_SIZE(mxt_device_info); i++) {
+		mxt_device_info[i].irq = gpio_to_irq(TP_GPIO_INTR);
+	}		
 
-	if (tegra_get_touch_vendor_id() == MAXIM_TOUCH) {
-		pr_info("%s init maxim touch\n", __func__);
-#if defined(CONFIG_TOUCHSCREEN_MAXIM_STI) || \
-	defined(CONFIG_TOUCHSCREEN_MAXIM_STI_MODULE)
-		if (tegra_get_touch_panel_id() == TOUCHPANEL_TN7)
-			maxim_sti_spi_board.platform_data = &maxim_sti_pdata_rd;
-		(void)touch_init_maxim_sti(&maxim_sti_spi_board);
-#endif
-	} else if (tegra_get_touch_vendor_id() == RAYDIUM_TOUCH) {
-		pr_info("%s init raydium touch\n", __func__);
-		tegra_clk_init_from_table(touch_clk_init_table);
-		if (board_info.board_id == BOARD_PM374) {
-			rm31080a_norrin_spi_board[0].irq =
-				gpio_to_irq(TOUCH_GPIO_IRQ_RAYDIUM_SPI);
-			touch_init_raydium(TOUCH_GPIO_IRQ_RAYDIUM_SPI,
-					TOUCH_GPIO_RST_RAYDIUM_SPI,
-					&rm31080ts_norrin_data,
-					&rm31080a_norrin_spi_board[0],
-					ARRAY_SIZE(rm31080a_norrin_spi_board));
-		} else if ((board_info.board_id == BOARD_P2530) ||
-			(board_info.board_id == BOARD_E2548)) {
-			if (board_info.sku == BOARD_SKU_FOSTER)
-				return 0;
-			if (tegra_get_touch_panel_id() == TOUCHPANEL_LOKI_JDI5)
-				rm31080a_ardbeg_spi_board[0].platform_data =
-					&rm31080ts_t132loki_data_jdi_5;
-			else
-				rm31080a_ardbeg_spi_board[0].platform_data =
-					&rm31080ts_t132loki_data;
-			if (board_info.fab >= 0xa3) {
-				rm31080ts_t132loki_data.name_of_clock = NULL;
-				rm31080ts_t132loki_data.name_of_clock_con = NULL;
-			} else
-				tegra_clk_init_from_table(touch_clk_init_table);
-				rm31080a_ardbeg_spi_board[0].irq =
-					gpio_to_irq(TOUCH_GPIO_IRQ_RAYDIUM_SPI);
-				touch_init_raydium(TOUCH_GPIO_IRQ_RAYDIUM_SPI,
-					TOUCH_GPIO_RST_RAYDIUM_SPI,
-					&rm31080ts_t132loki_data,
-					&rm31080a_ardbeg_spi_board[0],
-					ARRAY_SIZE(rm31080a_ardbeg_spi_board));
-		} else if (board_info.board_id == BOARD_P1761) {
-			rm31080a_tn8_spi_board[0].irq =
-				gpio_to_irq(TOUCH_GPIO_IRQ_RAYDIUM_SPI);
-			touch_init_raydium(TOUCH_GPIO_IRQ_RAYDIUM_SPI,
-				TOUCH_GPIO_RST_RAYDIUM_SPI,
-				&rm31080ts_tn8_data,
-				&rm31080a_tn8_spi_board[0],
-				ARRAY_SIZE(rm31080a_tn8_spi_board));
-                } else if (board_info.board_id == BOARD_P1765) {
-                        rm31080a_tn8_p1765_spi_board[0].irq =
-                                gpio_to_irq(TOUCH_GPIO_IRQ_RAYDIUM_SPI);
-                        touch_init_raydium(TOUCH_GPIO_IRQ_RAYDIUM_SPI,
-                                TOUCH_GPIO_RST_RAYDIUM_SPI,
-                                &rm31080ts_tn8_p1765_data,
-                                &rm31080a_tn8_p1765_spi_board[0],
-                                ARRAY_SIZE(rm31080a_tn8_p1765_spi_board));
-		} else {
-			rm31080a_ardbeg_spi_board[0].irq =
-				gpio_to_irq(TOUCH_GPIO_IRQ_RAYDIUM_SPI);
-			touch_init_raydium(TOUCH_GPIO_IRQ_RAYDIUM_SPI,
-					TOUCH_GPIO_RST_RAYDIUM_SPI,
-					&rm31080ts_ardbeg_data,
-					&rm31080a_ardbeg_spi_board[0],
-					ARRAY_SIZE(rm31080a_ardbeg_spi_board));
-		}
-	}
+	i2c_register_board_info(3, mxt_device_info, ARRAY_SIZE(mxt_device_info));			
+#endif		
+	i2c_register_board_info(3, s7040_device_info, ARRAY_SIZE(s7040_device_info));
+
 	return 0;
 }
 
@@ -1364,6 +1322,48 @@ static struct tegra_io_dpd pexclk2_io = {
 	.io_dpd_bit		= 6,
 };
 
+#ifdef CONFIG_BLUEDROID_PM
+static struct resource ardbeg_bluedroid_pm_resources[] = {
+	[0] = {
+		.name   = "shutdown_gpio",
+		.start  = TEGRA_GPIO_PR1,
+		.end    = TEGRA_GPIO_PR1,
+		.flags  = IORESOURCE_IO,
+	},
+	[1] = {
+		.name = "host_wake",
+		.flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
+	},
+	[2] = {
+		.name = "gpio_ext_wake",
+		.start  = TEGRA_GPIO_PEE1,
+		.end    = TEGRA_GPIO_PEE1,
+		.flags  = IORESOURCE_IO,
+	},
+	[3] = {
+		.name = "gpio_host_wake",
+		.start  = TEGRA_GPIO_PU6,
+		.end    = TEGRA_GPIO_PU6,
+		.flags  = IORESOURCE_IO,
+	},
+};
+
+static struct platform_device ardbeg_bluedroid_pm_device = {
+	.name = "bluedroid_pm",
+	.id             = 0,
+	.num_resources  = ARRAY_SIZE(ardbeg_bluedroid_pm_resources),
+	.resource       = ardbeg_bluedroid_pm_resources,
+};
+
+static noinline void __init ardbeg_setup_bluedroid_pm(void)
+{
+	ardbeg_bluedroid_pm_resources[1].start =
+		ardbeg_bluedroid_pm_resources[1].end =
+				gpio_to_irq(TEGRA_GPIO_PU6);
+	platform_device_register(&ardbeg_bluedroid_pm_device);
+}
+#endif
+
 #ifdef CONFIG_NV_SENSORHUB
 static int __init tegra_jetson_sensorhub_init(void)
 {
@@ -1426,12 +1426,7 @@ static void __init tegra_ardbeg_late_init(void)
 	ardbeg_xusb_init();
 #endif
 	ardbeg_i2c_init();
-	ardbeg_audio_init();
 	platform_add_devices(ardbeg_devices, ARRAY_SIZE(ardbeg_devices));
-	if (board_info.board_id == BOARD_PM374)	/* Norrin ERS */
-		platform_device_register(&norrin_audio_device_max98090);
-	else if (board_info.board_id != BOARD_PM359)
-		platform_device_register(&ardbeg_audio_device_rt5639);
 	tegra_io_dpd_init();
 	if (board_info.board_id == BOARD_E2548 ||
 			board_info.board_id == BOARD_P2530)
@@ -1508,7 +1503,9 @@ static void __init tegra_ardbeg_late_init(void)
 		ardbeg_soctherm_init();
 	}
 
-	ardbeg_setup_bluedroid_pm();
+#ifdef CONFIG_BLUEDROID_PM
+ 	ardbeg_setup_bluedroid_pm();
+#endif
 	ardbeg_sysedp_dynamic_capping_init();
 	ardbeg_sysedp_batmon_init();
 }

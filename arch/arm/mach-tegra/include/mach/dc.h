@@ -101,6 +101,16 @@ enum {
 	TEGRA_DSI_LINK1,
 };
 
+enum {
+	TEGRA_DSI_LEFT_RIGHT_NORMAL,
+	TEGRA_DSI_LEFT_RIGHT_FLIPPED,
+};
+
+enum {
+	TEGRA_DSI_EVEN_ODD_NORMAL,
+	TEGRA_DSI_EVEN_ODD_FLIPPED,
+};
+
 struct tegra_dsi_cmd {
 	u8	cmd_type;
 	u8	data_id;
@@ -160,12 +170,24 @@ extern struct fb_videomode tegra_dc_vga_mode;
 			_DSI_CMD_SHORT(di, p0, p1, TEGRA_DSI_LINK0,\
 				TEGRA_DSI_PACKET_VIDEO_VBLANK_CMD, club)
 
+#define DSI_CMD_VBLANK_SHORT_LINK(di, p0, p1, lnk_id) \
+			_DSI_CMD_SHORT(di, p0, p1, lnk_id,\
+				TEGRA_DSI_PACKET_VIDEO_VBLANK_CMD)
+
+#define DSI_CMD_VBLANK_SHORT_BOTH(di, p0, p1)	\
+		DSI_CMD_VBLANK_SHORT_LINK(di, p0, p1, TEGRA_DSI_LINK0), \
+		DSI_CMD_VBLANK_SHORT_LINK(di, p0, p1, TEGRA_DSI_LINK1)				
+
 #define DSI_CMD_SHORT_LINK(di, p0, p1, lnk_id) \
 			_DSI_CMD_SHORT(di, p0, p1, lnk_id,\
 				TEGRA_DSI_PACKET_CMD, CMD_NOT_CLUBBED)
 
 #define DSI_CMD_SHORT(di, p0, p1)	\
 			DSI_CMD_SHORT_LINK(di, p0, p1, TEGRA_DSI_LINK0)
+
+#define DSI_CMD_SHORT_BOTH(di, p0, p1)	\
+		DSI_CMD_SHORT_LINK(di, p0, p1, TEGRA_DSI_LINK0), \
+		DSI_CMD_SHORT_LINK(di, p0, p1, TEGRA_DSI_LINK1)
 
 #define DSI_DLY_MS(ms)	{ \
 			.cmd_type = TEGRA_DSI_DELAY_MS, \
@@ -195,6 +217,10 @@ extern struct fb_videomode tegra_dc_vga_mode;
 
 #define DSI_CMD_LONG(di, ptr)	\
 			DSI_CMD_LONG_LINK(di, ptr, TEGRA_DSI_LINK0)
+			
+#define DSI_CMD_LONG_BOTH(di, ptr)	\
+		DSI_CMD_LONG_LINK(di, ptr, TEGRA_DSI_LINK0), \
+		DSI_CMD_LONG_LINK(di, ptr, TEGRA_DSI_LINK1)
 
 #define DSI_SEND_FRAME(cnt)	{ \
 			.cmd_type = TEGRA_DSI_SEND_FRAME, \
@@ -323,6 +349,8 @@ struct tegra_dsi_out {
 	u8		video_clock_mode;
 	u8		video_burst_mode;
 	u8		ganged_type;
+	u8		left_right_align;
+	u8		even_odd_align;
 
 	u8		suspend_aggr;
 
@@ -335,6 +363,7 @@ struct tegra_dsi_out {
 	bool		no_pkt_seq_eot; /* 1st generation panel may not
 					 * support eot. Don't set it for
 					 * most panels. */
+	bool		no_pkt_seq_hbp;
 	bool		te_polarity_low;
 	bool		power_saving_suspend;
 	bool		dsi2lvds_bridge_enable;
